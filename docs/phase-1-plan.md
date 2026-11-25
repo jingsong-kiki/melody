@@ -4,7 +4,7 @@ description: "阶段 1 的落地顺序。每个 PR 只做一件事，并带上�
 
 # 阶段 1 实施计划
 
-按 [mvp.md](mvp.md) 的交付阶段 1 做。目标是 A 在 Claude Code 或 Codex 里一句话发出一张卡，B 在 inbox 里看到它，并可以自己回复，或点一下交给自己的 Agent，全程不复制内容。
+按 [mvp.md](mvp.md) 的交付阶段 1 做。部件、数据、不变量和接口以 [architecture.md](architecture.md) 为准，本文不另写一套。本文只排先做哪一块、改哪些文件、怎样验证。目标是 A 在 Claude Code 或 Codex 里一句话发出一张卡，B 在 inbox 里看到它，并可以自己回复，或点一下交给自己的 Agent，全程不复制内容。
 
 这一阶段用一个 Python 进程加一个 SQLite 文件。标准库的 `sqlite3` 和 `http.server`，不引入 Web 框架，也不做常驻客户端、企业微信、分享、公告牌和 worktree。卡片是唯一的信息单位。`work_branch` 列先留空。
 
