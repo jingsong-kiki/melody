@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>melody inbox</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; color: #222; }
+    h1 { font-size: 20px; }
+    section { margin-bottom: 28px; }
+    article { border: 1px solid #ccc; padding: 12px; margin: 8px 0; }
+    label { display: block; margin-top: 8px; }
+    textarea { width: 100%; min-height: 80px; }
+    .meta { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>melody inbox</h1>
+  __BODY__
+  <script>
+    if (window.EventSource && document.getElementById("signed-in")) {
+      if (window.Notification && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+      var source = new EventSource("/events");
+      source.onmessage = function (event) {
+        var item = JSON.parse(event.data);
+        if (window.Notification && Notification.permission === "granted") {
+          new Notification("melody " + item.id, {body: item.title + "，来自 " + item.sender});
+        }
+        location.reload();
+      };
+    }
+  </script>
+</body>
+</html>

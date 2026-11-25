@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "melody inbox --hook"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "melody inbox --hook"}]}]
+  }
+}
