@@ -4,6 +4,8 @@
 
 Accepted：由用户在规划评审中确认。本决策取代 [ADR-001](0001-thread-collaboration-and-native-handoff.md) 第 1 条“一件事一个 `#thread`，人机同场可 `@`”；ADR-001 的手动唤起、原生会话交接、`attempt_id` 防重与 worktree 来源透明继续有效。
 
+部分被调整：决策内容第 5 条中交付阶段 1 的“本机系统通知”已由 [ADR-003](0003-cards-addressed-to-people.md) 改为插件钩子与浏览器通知，不再需要 `melody watch` 常驻进程；交付阶段 2 的企业微信同时作为发起入口，见 [mvp.md](../mvp.md) 的 D7。
+
 ## 背景
 
 ADR-001 把协作载体设计为 melody 自建的 `#thread`：成员栏、消息流、输入框和 `@` 寻址。评审发现这套界面让产品看起来像一个与团队 IM 并列的新聊天或办公软件，团队需要多开一个地方讨论，而 melody 的核心价值其实是把一件事的上下文送到对方 Agent、经所有者确认后交给原工具执行、再把结果带回。
@@ -35,3 +37,4 @@ ADR-001 把协作载体设计为 melody 自建的 `#thread`：成员栏、消息
 - [当前 MVP 与分阶段交付](../mvp.md)
 - [架构方案](../architecture.md)
 - [ADR-001](0001-thread-collaboration-and-native-handoff.md)
+- [ADR-003](0003-cards-addressed-to-people.md)
