@@ -4,6 +4,8 @@
 
 Accepted：由用户在规划评审中拍板确认（取代早期云端 Docker 沙箱单仓库自动修复方向；旧规格已归档至 [docs/archive/cloud-sandbox-v0/](../archive/cloud-sandbox-v0/)）。
 
+部分被取代：决策内容第 1 条的 `#thread` 协作载体已由 [ADR-002](0002-inbox-cards-instead-of-chat.md) 的事项卡 inbox 取代；第 2 至 5 条继续有效，其中“读取 `#thread` 上下文”按事项卡的请求、附带上下文与往来记录理解。人与 Personal Agent 分别拥有可寻址身份的设定已由 [ADR-003](0003-cards-addressed-to-people.md) 取代：事项卡发给人，接收人一键交给自己的 Agent；第 2 条的手动唤起由接收人在自己工具中按回车完成。
+
 ## 背景
 
 早期草案（`cloud-sandbox-v0`）假设在服务端用 Docker 容器托管运行云端 Agent 自动修 bug。但团队日常已经广泛使用各自的 Personal Agent（Claude Code、Codex、Cursor 等），真正的痛点是：**跨人、跨 Agent 协作时，人被迫充当上下文搬运工，在不同聊天窗口和本地终端之间反复复制粘贴需求、背景和结果**。
@@ -34,4 +36,6 @@ Accepted：由用户在规划评审中拍板确认（取代早期云端 Docker �
 - [产品目标](../product.md)
 - [当前 MVP 与试验设计](../mvp.md)
 - [架构方案](../architecture.md)
+- [ADR-002：事项卡 inbox 取代自建 `#thread` 对话板](0002-inbox-cards-instead-of-chat.md)
+- [ADR-003：事项卡发给人，接收人一键交给自己的 Agent](0003-cards-addressed-to-people.md)
 - [历史归档：云端沙箱 V0](../archive/cloud-sandbox-v0/)
