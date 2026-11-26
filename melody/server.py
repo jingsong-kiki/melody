@@ -2,9 +2,10 @@ import json
 import os
 import queue
 import threading
+from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, list_cards, reply, set_endpoint, show
 from melody.db import connect, init
@@ -107,59 +108,33 @@ def make_server(path, host="127.0.0.1", port=0):
         def _page(self, query):
             token = self._token()
             if not token:
-                self._html(_login())
+                self._html(template.replace("__BODY__", _login()))
                 return
             try:
                 name = show_name(path, token)
             except CardError:
-                self._html(_login())
+                self._html(template.replace("__BODY__", _login()))
                 return
             selected = query.get("card", [""])[0]
             opened = show(path, token, selected) if selected else None
-            body = ['<p id="signed-in">%s</p>' % _esc(name)]
-            for view in VIEWS:
-                body.append("<section><h2>%s</h2>" % _esc(view))
-                for item in list_cards(path, token, view):
+            requested = query.get("view", [""])[0]
+            if requested in VIEWS:
+                view = requested
+            elif opened:
+                view = _queue_for(opened, name)
+            else:
+                view = VIEWS[0]
+            queues = []
+            for label in VIEWS:
+                rows = []
+                unread = 0
+                for item in list_cards(path, token, label):
                     full = show(path, token, item["id"], mark_read=False)
-                    body.append("<article>")
-                    body.append("<h3>%s</h3>" % _esc(full["id"]))
                     if item["unread"]:
-                        body.append("<p>未读</p>")
-                    body.append("<p>%s</p>" % _esc(full["request"]))
-                    for attachment in full["attachments"]:
-                        body.append("<p>%s</p>" % _esc(attachment["content"]))
-                    body.append('<p><a href="/?card=%s">打开</a></p>' % _esc(full["id"]))
-                    body.append("</article>")
-                body.append("</section>")
-            if opened:
-                closed = opened["status"] == "已关闭"
-                body.append("<article>")
-                body.append("<h2>%s</h2>" % _esc(opened["id"]))
-                body.append("<p>%s</p>" % _esc(opened["status"]))
-                body.append("<p>%s</p>" % _esc(opened["request"]))
-                body.append("<section><h3>往来</h3><ol>")
-                for entry in opened["entries"]:
-                    body.append(
-                        '<li><p class="meta">%s · %s</p><p>%s</p></li>'
-                        % (_esc(entry["author"]), _esc(entry["entry_type"]), _esc(entry["body"]))
-                    )
-                body.append("</ol></section>")
-                role = next(person["role"] for person in opened["participants"] if person["name"] == name)
-                if role == "接收人":
-                    if not closed:
-                        endpoint = _endpoint(path, token)
-                        link = build(endpoint["default_client"] or "claude", opened["id"], opened["repo_name"], endpoint["code_root"])
-                        body.append('<p><a href="%s">交给我的 Agent 处理</a></p>' % _esc(link))
-                    body.append(_form(f"/cards/{opened['id']}/reply", "回复"))
-                if role == "发起人":
-                    body.append(_form(f"/cards/{opened['id']}/follow-up", "追问"))
-                    if not closed:
-                        body.append(
-                            f'<form method="post" action="{_esc("/cards/" + opened["id"] + "/close")}">'
-                            '<button type="submit">收到</button></form>'
-                        )
-                body.append("</article>")
-            self._html(template.replace("__BODY__", "\n".join(body)))
+                        unread += 1
+                    rows.append((item, full))
+                queues.append((label, rows, unread))
+            self._html(template.replace("__BODY__", _inbox(name, view, queues, opened, path, token)))
 
         def _events(self):
             token = self._token()
@@ -290,21 +265,196 @@ def _esc(text):
 
 
 def _login():
-    return """
-    <form method="post" action="/session">
-      <label>个人令牌 <input name="token"></label>
-      <button type="submit">进入</button>
-    </form>
-    """
+    return (
+        '<form class="login" method="post" action="/session">'
+        '<label>个人令牌 <input name="token" autocomplete="off"></label>'
+        '<button class="send" type="submit">进入</button>'
+        "</form>"
+    )
 
 
-def _form(action, label):
+def _form(action, label, placeholder):
     return (
         f'<form method="post" action="{_esc(action)}">'
-        f'<label>{_esc(label)} <textarea name="body"></textarea></label>'
-        f'<button type="submit">{_esc(label)}</button>'
-        f"</form>"
+        f'<label class="clip">{_esc(label)}</label>'
+        f'<textarea name="body" placeholder="{_esc(placeholder)}"></textarea>'
+        f'<button class="send" type="submit">{_esc(label)}</button>'
+        "</form>"
     )
+
+
+def _queue_for(card, name):
+    if card["status"] == "已关闭":
+        return "已完成"
+    role = next(person["role"] for person in card["participants"] if person["name"] == name)
+    if role == "接收人":
+        return "待我处理"
+    return "我发出的"
+
+
+def _inbox(name, view, queues, opened, path, token):
+    body = ['<div class="shell" data-view="%s">' % _esc(view), '<div class="window">', '<aside class="rail">']
+    body.append('<div class="colhead">melody</div>')
+    body.append('<nav class="nav" aria-label="收件">')
+    for label, _rows, unread in queues:
+        current = ' aria-current="page"' if label == view else ""
+        badge = '<span class="badge">%d</span>' % unread if label == "待我处理" and unread else ""
+        body.append('<a href="/?view=%s"%s>%s%s</a>' % (quote(label), current, _esc(label), badge))
+    body.append("</nav>")
+    body.append(
+        '<p id="signed-in" class="me"><span class="avatar %s">%s</span>%s</p>'
+        % (_tone(name), _esc(_initial(name)), _esc(name))
+    )
+    body.append("</aside>")
+    body.append('<div class="list">')
+    selected = opened["id"] if opened else ""
+    for label, rows, _unread in queues:
+        body.append("<section><h2>%s</h2>" % _esc(label))
+        if rows:
+            body.append('<ul class="rows">')
+            for item, full in rows:
+                body.append(_row(label, item, full, selected))
+            body.append("</ul>")
+        else:
+            body.append('<p class="empty">没有事项卡</p>')
+        body.append("</section>")
+    body.append("</div>")
+    body.append(_reader(opened, name, path, token))
+    body.append("</div></div>")
+    return "\n".join(body)
+
+
+def _row(view, item, full, selected):
+    sender = next(person["name"] for person in full["participants"] if person["role"] == "发起人")
+    latest = full["entries"][-1]["created_at"] if full["entries"] else ""
+    state = "unread" if item["unread"] else "read"
+    current = ' aria-current="true"' if full["id"] == selected else ""
+    pip = '<i class="pip"></i><span class="clip">未读</span>' if item["unread"] else ""
+    held = "".join('<p class="clip">%s</p>' % _esc(attachment["content"]) for attachment in full["attachments"])
+    request = " ".join(full["request"].split())
+    extra = request[len(full["title"]):].strip()
+    preview = '<span class="preview">%s</span>' % _esc(extra) if extra else ""
+    return (
+        "<li><article>"
+        '<a class="row %s" href="/?view=%s&amp;card=%s"%s>'
+        '<span class="avatar %s">%s</span>'
+        '<span class="copy"><span class="who">%s%s</span><span class="subject">%s</span>%s</span>'
+        '<span class="when">%s</span>'
+        "</a>%s</article></li>"
+        % (
+            state,
+            quote(view),
+            quote(full["id"]),
+            current,
+            _tone(sender),
+            _esc(_initial(sender)),
+            pip,
+            _esc(sender),
+            _esc(full["title"]),
+            preview,
+            _esc(_when(latest)),
+            held,
+        )
+    )
+
+
+def _reader(opened, name, path, token):
+    if not opened:
+        return '<article class="reader"><div class="colhead"></div><p class="empty">选一张卡</p></article>'
+    initiator = next(person["name"] for person in opened["participants"] if person["role"] == "发起人")
+    recipient = next(person["name"] for person in opened["participants"] if person["role"] == "接收人")
+    role = next(person["role"] for person in opened["participants"] if person["name"] == name)
+    kind = "执行卡" if opened["type"] == "执行" else "问题卡"
+    meta = "发给 %s" % recipient
+    if opened["repo_name"]:
+        meta += " · %s" % opened["repo_name"]
+    if opened["visibility"] == "参与者":
+        meta += " · 仅参与者"
+    closed = opened["status"] == "已关闭"
+    parts = [
+        '<article class="reader">',
+        '<h2><span class="title">%s</span><span>%s · %s · %s</span></h2>'
+        % (_esc(opened["title"]), _esc(opened["id"]), _esc(kind), _esc(opened["status"])),
+        '<div class="scroll"><div class="thread">',
+        '<div class="from"><span class="avatar %s">%s</span><div><div class="name">%s</div><div class="meta">%s</div></div></div>'
+        % (_tone(initiator), _esc(_initial(initiator)), _esc(initiator), _esc(meta)),
+    ]
+    for attachment in opened["attachments"]:
+        parts.append(_attachment(attachment))
+    parts.append("<section><h3>往来</h3><ol class=\"log\">")
+    for entry in opened["entries"]:
+        who = entry["author"]
+        mode = "" if entry["author_mode"] == "本人" else entry["author_mode"]
+        parts.append(
+            '<li class="msg"><span class="avatar %s">%s</span><div>'
+            '<div class="msg-h"><b>%s</b><span>%s</span><time>%s</time></div><p>%s</p></div></li>'
+            % (
+                _tone(who),
+                _esc(_initial(who)),
+                _esc(who),
+                _esc(entry["entry_type"] if not mode else "%s · %s" % (entry["entry_type"], mode)),
+                _esc(_when(entry["created_at"])),
+                _esc(entry["body"]),
+            )
+        )
+    parts.append("</ol></section></div></div>")
+    parts.append('<div class="composer">')
+    if role == "接收人":
+        parts.append(_form("/cards/%s/reply" % opened["id"], "回复", "写回这张卡"))
+        if not closed:
+            endpoint = _endpoint(path, token)
+            client = endpoint["default_client"] or "claude"
+            link = build(client, opened["id"], opened["repo_name"], endpoint["code_root"])
+            parts.append('<a class="ghost" href="%s">交给我的 Agent 处理<em>%s</em></a>' % (_esc(link), _esc(_client_name(client))))
+    if role == "发起人":
+        parts.append(_form("/cards/%s/follow-up" % opened["id"], "追问", "写下追问"))
+        if not closed:
+            parts.append(
+                '<form class="plain" method="post" action="%s"><button class="ghost" type="submit">收到</button></form>'
+                % _esc("/cards/%s/close" % opened["id"])
+            )
+    parts.append("</div></article>")
+    return "".join(parts)
+
+
+def _attachment(item):
+    source = item["source"] or "附件"
+    ext = source.rsplit(".", 1)[-1][:4] if "." in source else "file"
+    content = item["content"]
+    head = (
+        '<div class="file"><span class="ext">%s</span><span><b>%s</b>'
+        % (_esc(ext), _esc(source))
+    )
+    if "\n" in content or len(content) > 80:
+        return head + "</span></div>" + '<pre class="attachment">%s</pre>' % _esc(content)
+    return head + "<small>%s</small></span></div>" % _esc(content)
+
+
+def _client_name(client):
+    return {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}.get(client, client)
+
+
+def _when(iso):
+    if not iso:
+        return ""
+    moment = datetime.fromisoformat(iso)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(timezone(timedelta(hours=8)))
+    now = datetime.now(timezone(timedelta(hours=8)))
+    if local.date() == now.date():
+        return local.strftime("%H:%M")
+    if local.year == now.year:
+        return "%d/%d" % (local.month, local.day)
+    return local.strftime("%Y-%m-%d")
+
+
+def _tone(name):
+    return ("tone-a", "tone-c", "tone-b")[sum(ord(char) for char in name) % 3]
+
+
+def _initial(name):
+    return name[:1] if name else "?"
 
 
 def main(argv):
