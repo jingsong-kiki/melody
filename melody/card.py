@@ -105,19 +105,10 @@ def show(path, token, public_id, mark_read=True):
         role = _role(conn, card["id"], person["id"])
         if role is None:
             raise CardError("forbidden")
-        if mark_read and role == "接收人" and card["status"] == OPEN:
-            conn.execute("UPDATE cards SET status = ? WHERE id = ?", (READ, card["id"]))
-            latest = conn.execute(
-                "SELECT id FROM card_entries WHERE card_id = ? ORDER BY id DESC LIMIT 1",
-                (card["id"],),
-            ).fetchone()
-            entry_id = latest["id"] if latest else 0
-            conn.execute(
-                """INSERT INTO read_marks (card_id, person_id, entry_id)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(card_id, person_id) DO UPDATE SET entry_id = excluded.entry_id""",
-                (card["id"], person["id"], entry_id),
-            )
+        if mark_read and role == "接收人":
+            if card["status"] == OPEN:
+                conn.execute("UPDATE cards SET status = ? WHERE id = ?", (READ, card["id"]))
+            _mark_read(conn, card["id"], person["id"])
         return _present(conn, card["id"])
 
 
@@ -157,7 +148,7 @@ def list_cards(path, token, view):
         else:
             raise CardError("invalid")
         rows = conn.execute(
-            f"""SELECT cards.public_id, cards.type, cards.request, cards.status, cards.repo_name
+            f"""SELECT cards.id, cards.public_id, cards.type, cards.request, cards.status, cards.repo_name, me.role
                 FROM cards
                 JOIN card_participants me ON me.card_id = cards.id AND me.person_id = ?
                 WHERE {where}
@@ -172,6 +163,7 @@ def list_cards(path, token, view):
                 "request": row["request"],
                 "status": row["status"],
                 "repo_name": row["repo_name"],
+                "unread": _unread(conn, row["id"], person["id"], row["role"], row["status"]),
             }
             for row in rows
         ]
@@ -189,6 +181,7 @@ def reply(path, token, public_id, body, author_mode="本人"):
         if _role(conn, card["id"], person["id"]) != "接收人":
             raise CardError("forbidden")
         _entry(conn, card["id"], person["id"], author_mode, "回复", body)
+        _mark_read(conn, card["id"], person["id"])
         if card["status"] != CLOSED:
             conn.execute("UPDATE cards SET status = ? WHERE id = ?", (REPLIED, card["id"]))
     return show(path, token, public_id, mark_read=False)
@@ -256,6 +249,26 @@ def _entry(conn, card_id, author_id, author_mode, entry_type, body):
            VALUES (?, ?, ?, ?, ?, ?)""",
         (card_id, author_id, author_mode, entry_type, body, datetime.now(timezone.utc).isoformat()),
     )
+
+
+def _mark_read(conn, card_id, person_id):
+    conn.execute(
+        """INSERT INTO read_marks (card_id, person_id, entry_id)
+           SELECT ?, ?, COALESCE(MAX(id), 0) FROM card_entries WHERE card_id = ?
+           ON CONFLICT(card_id, person_id) DO UPDATE SET entry_id = excluded.entry_id""",
+        (card_id, person_id, card_id),
+    )
+
+
+def _unread(conn, card_id, person_id, role, status):
+    if role != "接收人" or status == CLOSED:
+        return False
+    row = conn.execute(
+        """SELECT (SELECT entry_id FROM read_marks WHERE card_id = ? AND person_id = ?) AS seen,
+                  (SELECT MAX(id) FROM card_entries WHERE card_id = ?) AS latest""",
+        (card_id, person_id, card_id),
+    ).fetchone()
+    return row["seen"] is None or row["seen"] < row["latest"]
 
 
 def _latest_reply(conn, card_id):

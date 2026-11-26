@@ -92,10 +92,10 @@ def make_server(path, host="127.0.0.1", port=0):
                     self._wrote(card, payload)
                 elif parsed.path.startswith("/cards/") and parsed.path.endswith("/follow-up"):
                     public_id = parsed.path.split("/")[2]
-                    self._json(200, follow_up(path, self._token(payload), public_id, payload.get("body", "")))
+                    self._wrote(follow_up(path, self._token(payload), public_id, payload.get("body", "")), payload)
                 elif parsed.path.startswith("/cards/") and parsed.path.endswith("/close"):
                     public_id = parsed.path.split("/")[2]
-                    self._json(200, close_card(path, self._token(payload), public_id, payload.get("conclusion")))
+                    self._wrote(close_card(path, self._token(payload), public_id, payload.get("conclusion")), payload)
                 else:
                     self._empty(404)
             except CardError as error:
@@ -115,6 +115,7 @@ def make_server(path, host="127.0.0.1", port=0):
                 self._html(_login())
                 return
             selected = query.get("card", [""])[0]
+            opened = show(path, token, selected) if selected else None
             body = ['<p id="signed-in">%s</p>' % _esc(name)]
             for view in VIEWS:
                 body.append("<section><h2>%s</h2>" % _esc(view))
@@ -122,26 +123,41 @@ def make_server(path, host="127.0.0.1", port=0):
                     full = show(path, token, item["id"], mark_read=False)
                     body.append("<article>")
                     body.append("<h3>%s</h3>" % _esc(full["id"]))
+                    if item["unread"]:
+                        body.append("<p>未读</p>")
                     body.append("<p>%s</p>" % _esc(full["request"]))
                     for attachment in full["attachments"]:
                         body.append("<p>%s</p>" % _esc(attachment["content"]))
                     body.append('<p><a href="/?card=%s">打开</a></p>' % _esc(full["id"]))
                     body.append("</article>")
                 body.append("</section>")
-            if selected:
-                full = show(path, token, selected)
+            if opened:
+                closed = opened["status"] == "已关闭"
                 body.append("<article>")
-                body.append("<h2>%s</h2>" % _esc(full["id"]))
-                body.append("<p>%s</p>" % _esc(full["status"]))
-                body.append("<p>%s</p>" % _esc(full["request"]))
-                role = next(person["role"] for person in full["participants"] if person["name"] == name)
-                if role == "接收人" and full["status"] != "已关闭":
-                    endpoint = _endpoint(path, token)
-                    link = build(endpoint["default_client"] or "claude", full["id"], full["repo_name"], endpoint["code_root"])
-                    body.append('<p><a href="%s">交给我的 Agent 处理</a></p>' % _esc(link))
-                    body.append(_form(f"/cards/{full['id']}/reply", "回复"))
-                if role == "发起人" and full["status"] != "已关闭":
-                    body.append(_form(f"/cards/{full['id']}/close", "收到"))
+                body.append("<h2>%s</h2>" % _esc(opened["id"]))
+                body.append("<p>%s</p>" % _esc(opened["status"]))
+                body.append("<p>%s</p>" % _esc(opened["request"]))
+                body.append("<section><h3>往来</h3><ol>")
+                for entry in opened["entries"]:
+                    body.append(
+                        '<li><p class="meta">%s · %s</p><p>%s</p></li>'
+                        % (_esc(entry["author"]), _esc(entry["entry_type"]), _esc(entry["body"]))
+                    )
+                body.append("</ol></section>")
+                role = next(person["role"] for person in opened["participants"] if person["name"] == name)
+                if role == "接收人":
+                    if not closed:
+                        endpoint = _endpoint(path, token)
+                        link = build(endpoint["default_client"] or "claude", opened["id"], opened["repo_name"], endpoint["code_root"])
+                        body.append('<p><a href="%s">交给我的 Agent 处理</a></p>' % _esc(link))
+                    body.append(_form(f"/cards/{opened['id']}/reply", "回复"))
+                if role == "发起人":
+                    body.append(_form(f"/cards/{opened['id']}/follow-up", "追问"))
+                    if not closed:
+                        body.append(
+                            f'<form method="post" action="{_esc("/cards/" + opened["id"] + "/close")}">'
+                            '<button type="submit">收到</button></form>'
+                        )
                 body.append("</article>")
             self._html(template.replace("__BODY__", "\n".join(body)))
 

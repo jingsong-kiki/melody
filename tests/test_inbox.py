@@ -1,14 +1,15 @@
 import json
+import re
 import sys
 import tempfile
 import unittest
 from html import unescape
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.support import call, login, page_section, start, stop
+from tests.support import call, login, page_section, reply_action, start, stop
 
 
 class InboxTest(unittest.TestCase):
@@ -51,6 +52,33 @@ class InboxTest(unittest.TestCase):
         self.assertNotIn(self.card_id, page_section(page, "已完成"))
         self.assertNotIn("新建", page)
 
+    def test_unread_clears_on_open_and_returns_after_the_initiator_follows_up(self):
+        self.page("/")
+        pending = page_section(self.page("/"), "待我处理")
+        self.assertIn(self.card_id, pending)
+        self.assertIn("未读", pending)
+
+        opened = self.page("/?card=" + self.card_id)
+        self.assertNotIn("未读", page_section(opened, "待我处理"))
+        self.assertIn("往来", opened)
+        self.assertIn("补退款状态接口", opened.split("往来", 1)[1])
+
+        status, _body, _headers = call(self.url, "POST", reply_action(opened), cookie=self.cookie, form=urlencode({"body": "服务端写"}))
+        self.assertEqual(status, 303)
+
+        initiator = login(self.url, self.a)
+        detail = self.page("/?card=" + self.card_id, initiator)
+        self.assertIn("服务端写", detail.split("往来", 1)[1])
+        action = re.search(r'action="([^"]*/follow-up)"', detail).group(1)
+
+        status, _body, _headers = call(self.url, "POST", action, cookie=initiator, form=urlencode({"body": "空值呢"}))
+        self.assertEqual(status, 303)
+
+        self.assertIn("未读", page_section(self.page("/"), "待我处理"))
+        reopened = self.page("/?card=" + self.card_id)
+        self.assertIn("空值呢", reopened.split("往来", 1)[1])
+        self.assertNotIn("未读", page_section(reopened, "待我处理"))
+
     def test_page_link_follows_the_default_client_and_omits_the_request(self):
         claude = self.link_for("claude")
         self.assertTrue(claude.startswith("claude-cli://open?q="))
@@ -79,8 +107,8 @@ class InboxTest(unittest.TestCase):
         self.assertNotIn("VISIBLE_FIELD", href)
         return href
 
-    def page(self, path):
-        status, body, _headers = call(self.url, "GET", path, cookie=self.cookie)
+    def page(self, path, cookie=None):
+        status, body, _headers = call(self.url, "GET", path, cookie=cookie or self.cookie)
         self.assertEqual(status, 200, body)
         return body.decode()
 

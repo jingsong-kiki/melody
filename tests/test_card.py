@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, reply, show
+from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, list_cards, reply, show
 from melody.db import init
 
 
@@ -66,6 +66,26 @@ class CardTest(unittest.TestCase):
         reply(self.path, self.b, created["id"], "服务端写")
         asked = follow_up(self.path, self.a, created["id"], "空值呢")
         self.assertEqual(asked["status"], "已读")
+
+    def test_recipient_sees_unread_until_opening_and_again_after_a_follow_up(self):
+        created = create_card(self.path, self.a, "B", "问题", "这个字段谁写", [])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), True)
+        self.assertIs(self.unread(self.a, "我发出的", created["id"]), False)
+
+        show(self.path, self.b, created["id"])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+        reply(self.path, self.b, created["id"], "服务端写")
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+        follow_up(self.path, self.a, created["id"], "空值呢")
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), True)
+
+        show(self.path, self.b, created["id"])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+    def unread(self, token, view, card_id):
+        return next(item["unread"] for item in list_cards(self.path, token, view) if item["id"] == card_id)
 
     def test_only_listed_attachments_are_stored(self):
         created = create_card(
