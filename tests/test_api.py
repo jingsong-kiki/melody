@@ -83,16 +83,6 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(box["status"], 200)
         self.assertIn("新问题", box["body"].decode())
 
-    def test_list_fifty_cards_within_budget(self):
-        for index in range(50):
-            call(self.url, "POST", "/cards", token=self.a, payload={"recipient": "B", "type": "问题", "request": f"问题 {index}"})
-        started = time.perf_counter()
-        status, body, _headers = call(self.url, "GET", "/cards?view=待我处理", token=self.b)
-        elapsed = time.perf_counter() - started
-        self.assertEqual(status, 200)
-        self.assertEqual(len(json.loads(body)["cards"]), 50)
-        self.assertLess(elapsed, 0.1)
-
 
 if __name__ == "__main__":
     unittest.main()

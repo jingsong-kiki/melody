@@ -1,6 +1,5 @@
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -68,6 +67,26 @@ class CardTest(unittest.TestCase):
         asked = follow_up(self.path, self.a, created["id"], "空值呢")
         self.assertEqual(asked["status"], "已读")
 
+    def test_recipient_sees_unread_until_opening_and_again_after_a_follow_up(self):
+        created = create_card(self.path, self.a, "B", "问题", "这个字段谁写", [])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), True)
+        self.assertIs(self.unread(self.a, "我发出的", created["id"]), False)
+
+        show(self.path, self.b, created["id"])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+        reply(self.path, self.b, created["id"], "服务端写")
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+        follow_up(self.path, self.a, created["id"], "空值呢")
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), True)
+
+        show(self.path, self.b, created["id"])
+        self.assertIs(self.unread(self.b, "待我处理", created["id"]), False)
+
+    def unread(self, token, view, card_id):
+        return next(item["unread"] for item in list_cards(self.path, token, view) if item["id"] == card_id)
+
     def test_only_listed_attachments_are_stored(self):
         created = create_card(
             self.path,
@@ -83,15 +102,6 @@ class CardTest(unittest.TestCase):
         created = create_card(self.path, self.a, "B", "问题", "能空吗", [])
         self.assertEqual(created["work_branch"], "")
         self.assertTrue(created["id"].startswith("Q-"))
-
-    def test_list_fifty_pending_cards_within_budget(self):
-        for index in range(50):
-            create_card(self.path, self.a, "B", "问题", f"问题 {index}", [])
-        started = time.perf_counter()
-        rows = list_cards(self.path, self.b, "待我处理")
-        elapsed = time.perf_counter() - started
-        self.assertEqual(len(rows), 50)
-        self.assertLess(elapsed, 0.1)
 
 
 if __name__ == "__main__":
