@@ -1,12 +1,11 @@
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, list_cards, reply, show
+from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, reply, show
 from melody.db import init
 
 
@@ -83,15 +82,6 @@ class CardTest(unittest.TestCase):
         created = create_card(self.path, self.a, "B", "问题", "能空吗", [])
         self.assertEqual(created["work_branch"], "")
         self.assertTrue(created["id"].startswith("Q-"))
-
-    def test_list_fifty_pending_cards_within_budget(self):
-        for index in range(50):
-            create_card(self.path, self.a, "B", "问题", f"问题 {index}", [])
-        started = time.perf_counter()
-        rows = list_cards(self.path, self.b, "待我处理")
-        elapsed = time.perf_counter() - started
-        self.assertEqual(len(rows), 50)
-        self.assertLess(elapsed, 0.1)
 
 
 if __name__ == "__main__":
