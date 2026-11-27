@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, list_cards, reply, show
+from melody.card import CardError, add_person, close_card, create_card, follow_up, hook_list, list_cards, reply, set_endpoint, show
 from melody.db import init
 
 
@@ -97,6 +97,32 @@ class CardTest(unittest.TestCase):
             [{"source": "a.py", "content": "kept", "repo": "order-service"}],
         )
         self.assertEqual([item["source"] for item in created["attachments"]], ["a.py"])
+
+    def test_hook_drops_a_card_after_reply_and_lists_it_again_after_follow_up(self):
+        created = create_card(self.path, self.a, "B", "问题", "这个字段谁写", [])
+        show(self.path, self.b, created["id"])
+        self.assertEqual([item["id"] for item in hook_list(self.path, self.b)], [created["id"]])
+        reply(self.path, self.b, created["id"], "服务端写")
+        self.assertEqual(hook_list(self.path, self.b), [])
+        follow_up(self.path, self.a, created["id"], "空值呢")
+        self.assertEqual([item["id"] for item in hook_list(self.path, self.b)], [created["id"]])
+
+    def test_repo_name_cannot_leave_the_code_root(self):
+        with self.assertRaises(CardError) as caught:
+            create_card(self.path, self.a, "B", "问题", "看配置", [{"source": "a.py", "content": "x", "repo": "/etc"}])
+        self.assertEqual(caught.exception.code, "invalid")
+        with self.assertRaises(CardError) as caught:
+            create_card(self.path, self.a, "B", "问题", "看配置", [{"source": "a.py", "content": "x", "repo": ".."}])
+        self.assertEqual(caught.exception.code, "invalid")
+
+    def test_endpoint_keeps_unset_fields_and_rejects_an_unknown_client(self):
+        set_endpoint(self.path, self.b, default_client="claude", code_root="/tmp/keep")
+        kept = set_endpoint(self.path, self.b, default_client="Cursor")
+        self.assertEqual(kept["default_client"], "cursor")
+        self.assertEqual(kept["code_root"], "/tmp/keep")
+        with self.assertRaises(CardError) as caught:
+            set_endpoint(self.path, self.b, default_client="vim")
+        self.assertEqual(caught.exception.code, "invalid")
 
     def test_question_card_has_empty_work_branch(self):
         created = create_card(self.path, self.a, "B", "问题", "能空吗", [])

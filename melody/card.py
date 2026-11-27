@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+import sqlite3
 from datetime import datetime, timezone
 
 from melody.db import connect
@@ -26,22 +27,34 @@ def add_person(path, name):
         exists = conn.execute("SELECT id FROM persons WHERE name = ?", (name,)).fetchone()
         if exists:
             raise CardError("exists")
-        conn.execute("INSERT INTO persons (name, token) VALUES (?, ?)", (name, token))
+        try:
+            conn.execute("INSERT INTO persons (name, token) VALUES (?, ?)", (name, token))
+        except sqlite3.IntegrityError:
+            raise CardError("exists") from None
         person_id = conn.execute("SELECT id FROM persons WHERE token = ?", (token,)).fetchone()["id"]
         conn.execute("INSERT INTO endpoints (person_id) VALUES (?)", (person_id,))
     return {"name": name, "token": token}
 
 
-def set_endpoint(path, token, default_client="", code_root="", optional_clients=""):
+def set_endpoint(path, token, default_client=None, code_root=None, optional_clients=None):
     with connect(path) as conn:
         person = _person(conn, token)
+        row = conn.execute(
+            "SELECT default_client, code_root, optional_clients FROM endpoints WHERE person_id = ?",
+            (person["id"],),
+        ).fetchone()
+        client = row["default_client"] if default_client is None else str(default_client).strip().lower()
+        root = row["code_root"] if code_root is None else code_root
+        optional = row["optional_clients"] if optional_clients is None else optional_clients
+        if client not in ("", "claude", "codex", "cursor"):
+            raise CardError("invalid")
         conn.execute(
             """UPDATE endpoints
                SET default_client = ?, code_root = ?, optional_clients = ?
                WHERE person_id = ?""",
-            (default_client, code_root, optional_clients, person["id"]),
+            (client, root, optional, person["id"]),
         )
-    return {"name": person["name"], "default_client": default_client, "code_root": code_root}
+    return {"name": person["name"], "default_client": client, "code_root": root}
 
 
 def create_card(path, token, recipient_name, card_type, request, attachments):
@@ -51,6 +64,10 @@ def create_card(path, token, recipient_name, card_type, request, attachments):
     if not request:
         raise CardError("invalid")
     attachments = list(attachments or [])
+    for item in attachments:
+        repo = (item.get("repo") or "").strip()
+        if repo and not safe_repo(repo):
+            raise CardError("invalid")
     with connect(path) as conn:
         initiator = _person(conn, token)
         recipient = conn.execute("SELECT * FROM persons WHERE name = ?", (recipient_name,)).fetchone()
@@ -106,8 +123,10 @@ def show(path, token, public_id, mark_read=True):
         if role is None:
             raise CardError("forbidden")
         if mark_read and role == "接收人":
-            if card["status"] == OPEN:
-                conn.execute("UPDATE cards SET status = ? WHERE id = ?", (READ, card["id"]))
+            conn.execute(
+                "UPDATE cards SET status = ? WHERE id = ? AND status = ?",
+                (READ, card["id"], OPEN),
+            )
             _mark_read(conn, card["id"], person["id"])
         return _present(conn, card["id"])
 
@@ -123,9 +142,9 @@ def hook_list(path, token):
                JOIN card_participants owner
                  ON owner.card_id = cards.id AND owner.role = '发起人'
                JOIN persons sender ON sender.id = owner.person_id
-               WHERE cards.status != ?
+               WHERE cards.status IN (?, ?)
                ORDER BY cards.id""",
-            (person["id"], CLOSED),
+            (person["id"], OPEN, READ),
         ).fetchall()
         return [{"id": row["public_id"], "title": _title(row["request"]), "sender": row["sender"]} for row in rows]
 
@@ -182,8 +201,10 @@ def reply(path, token, public_id, body, author_mode="本人"):
             raise CardError("forbidden")
         _entry(conn, card["id"], person["id"], author_mode, "回复", body)
         _mark_read(conn, card["id"], person["id"])
-        if card["status"] != CLOSED:
-            conn.execute("UPDATE cards SET status = ? WHERE id = ?", (REPLIED, card["id"]))
+        conn.execute(
+            "UPDATE cards SET status = ? WHERE id = ? AND status != ?",
+            (REPLIED, card["id"], CLOSED),
+        )
     return show(path, token, public_id, mark_read=False)
 
 
@@ -197,8 +218,10 @@ def follow_up(path, token, public_id, body):
         if _role(conn, card["id"], person["id"]) != "发起人":
             raise CardError("forbidden")
         _entry(conn, card["id"], person["id"], "本人", "追问", body)
-        if card["status"] == REPLIED:
-            conn.execute("UPDATE cards SET status = ? WHERE id = ?", (READ, card["id"]))
+        conn.execute(
+            "UPDATE cards SET status = ? WHERE id = ? AND status = ?",
+            (READ, card["id"], REPLIED),
+        )
     return show(path, token, public_id, mark_read=False)
 
 
@@ -208,12 +231,12 @@ def close_card(path, token, public_id, conclusion=None):
         card = _card(conn, public_id)
         if _role(conn, card["id"], person["id"]) != "发起人":
             raise CardError("forbidden")
-        if card["status"] != CLOSED:
-            text = (conclusion or "").strip() or _latest_reply(conn, card["id"])
-            conn.execute(
-                "UPDATE cards SET status = ?, conclusion = ? WHERE id = ?",
-                (CLOSED, text, card["id"]),
-            )
+        text = (conclusion or "").strip() or _latest_reply(conn, card["id"])
+        updated = conn.execute(
+            "UPDATE cards SET status = ?, conclusion = ? WHERE id = ? AND status != ?",
+            (CLOSED, text, card["id"], CLOSED),
+        )
+        if updated.rowcount:
             _entry(conn, card["id"], person["id"], "本人", "状态变化", "已关闭")
     return show(path, token, public_id, mark_read=False)
 
@@ -279,6 +302,14 @@ def _latest_reply(conn, card_id):
         (card_id,),
     ).fetchone()
     return row["body"] if row else ""
+
+
+def safe_repo(name):
+    if not name or name in (".", ".."):
+        return False
+    if "/" in name or "\\" in name or ".." in name:
+        return False
+    return True
 
 
 def _repo_name(attachments):

@@ -47,7 +47,10 @@ class InboxTest(unittest.TestCase):
         pending = page_section(page, "待我处理")
         self.assertIn(self.card_id, pending)
         self.assertIn("补退款状态接口", pending)
-        self.assertIn("VISIBLE_FIELD", pending)
+        self.assertNotIn("VISIBLE_FIELD", pending)
+        opened = self.page("/?card=" + self.card_id)
+        self.assertIn("VISIBLE_FIELD", opened)
+        self.assertIn("refund.py", opened)
         self.assertNotIn(self.card_id, page_section(page, "我发出的"))
         self.assertNotIn(self.card_id, page_section(page, "已完成"))
         self.assertNotIn("新建", page)
@@ -63,16 +66,18 @@ class InboxTest(unittest.TestCase):
         self.assertIn("往来", opened)
         self.assertIn("补退款状态接口", opened.split("往来", 1)[1])
 
-        status, _body, _headers = call(self.url, "POST", reply_action(opened), cookie=self.cookie, form=urlencode({"body": "服务端写"}))
+        status, _body, headers = call(self.url, "POST", reply_action(opened), cookie=self.cookie, form=urlencode({"body": "服务端写"}))
         self.assertEqual(status, 303)
+        self.assertIn(self.card_id, self.location(headers))
 
         initiator = login(self.url, self.a)
         detail = self.page("/?card=" + self.card_id, initiator)
         self.assertIn("服务端写", detail.split("往来", 1)[1])
         action = re.search(r'action="([^"]*/follow-up)"', detail).group(1)
 
-        status, _body, _headers = call(self.url, "POST", action, cookie=initiator, form=urlencode({"body": "空值呢"}))
+        status, _body, headers = call(self.url, "POST", action, cookie=initiator, form=urlencode({"body": "空值呢"}))
         self.assertEqual(status, 303)
+        self.assertIn(self.card_id, self.location(headers))
 
         self.assertIn("未读", page_section(self.page("/"), "待我处理"))
         reopened = self.page("/?card=" + self.card_id)
@@ -106,6 +111,50 @@ class InboxTest(unittest.TestCase):
         self.assertNotIn("补退款状态接口", href)
         self.assertNotIn("VISIBLE_FIELD", href)
         return href
+
+    def test_a_client_only_update_keeps_the_saved_root_even_when_the_repo_is_absent(self):
+        missing = "missing-service"
+        created = json.loads(
+            call(
+                self.url,
+                "POST",
+                "/cards",
+                token=self.a,
+                payload={
+                    "recipient": "B",
+                    "type": "问题",
+                    "request": "目录不在这台机器上",
+                    "attachments": [{"source": "a.py", "content": "x", "repo": missing}],
+                },
+            )[1]
+        )
+        call(self.url, "POST", "/endpoint", token=self.b, payload={"default_client": "codex"})
+        page = unescape(self.page("/?card=" + created["id"]))
+        start = page.find("codex://")
+        href = unquote(page[start:].split('"', 1)[0])
+        self.assertIn("path=", href)
+        self.assertIn(str(self.root) + "/" + missing, href)
+
+    def test_repeated_spaces_do_not_cut_the_preview_mid_word(self):
+        call(
+            self.url,
+            "POST",
+            "/cards",
+            token=self.a,
+            payload={"recipient": "B", "type": "问题", "request": "foo  bar\nsecond line"},
+        )
+        page = self.page("/")
+        self.assertIn('class="preview">second line', page)
+        self.assertNotIn('class="preview">econd', page)
+
+    def test_conclusion_is_shown_when_it_is_not_the_latest_reply(self):
+        call(self.url, "POST", "/cards/" + self.card_id + "/reply", token=self.b, payload={"body": "服务端写"})
+        call(self.url, "POST", "/cards/" + self.card_id + "/close", token=self.a, payload={"conclusion": "单独的结论"})
+        page = self.page("/?card=" + self.card_id, login(self.url, self.a))
+        self.assertIn("结论 单独的结论", page)
+
+    def location(self, headers):
+        return next(value for key, value in headers.items() if key.lower() == "location")
 
     def page(self, path, cookie=None):
         status, body, _headers = call(self.url, "GET", path, cookie=cookie or self.cookie)

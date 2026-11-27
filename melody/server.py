@@ -65,8 +65,8 @@ def make_server(path, host="127.0.0.1", port=0):
 
         def do_POST(self):
             parsed = urlparse(self.path)
-            payload = self._payload()
             try:
+                payload = self._payload()
                 if parsed.path == "/persons":
                     self._json(201, add_person(path, payload.get("name", "")))
                 elif parsed.path == "/session":
@@ -74,7 +74,12 @@ def make_server(path, host="127.0.0.1", port=0):
                     show_name(path, token)
                     self._cookie(token)
                 elif parsed.path == "/endpoint":
-                    self._json(200, set_endpoint(path, self._token(payload), payload.get("default_client", ""), payload.get("code_root", "")))
+                    fields = {}
+                    if "default_client" in payload:
+                        fields["default_client"] = payload["default_client"]
+                    if "code_root" in payload:
+                        fields["code_root"] = payload["code_root"]
+                    self._json(200, set_endpoint(path, self._token(payload), **fields))
                 elif parsed.path == "/cards":
                     card = create_card(
                         path,
@@ -101,6 +106,8 @@ def make_server(path, host="127.0.0.1", port=0):
                     self._empty(404)
             except CardError as error:
                 self._error(error)
+            except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+                self._error(CardError("invalid"))
 
         def log_message(self, fmt, *args):
             return
@@ -149,11 +156,17 @@ def make_server(path, host="127.0.0.1", port=0):
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
-                payload = waiting.get(timeout=5)
-                data = json.dumps(payload, ensure_ascii=False)
-                self.wfile.write(f"data: {data}\n\n".encode())
-                self.wfile.flush()
-            except (queue.Empty, BrokenPipeError, ConnectionResetError):
+                while True:
+                    try:
+                        payload = waiting.get(timeout=5)
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    data = json.dumps(payload, ensure_ascii=False)
+                    self.wfile.write(f"data: {data}\n\n".encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 return
             finally:
                 hub.unlisten(name, waiting)
@@ -161,7 +174,7 @@ def make_server(path, host="127.0.0.1", port=0):
         def _wrote(self, card, payload):
             if payload.get("_form"):
                 self.send_response(303)
-                self.send_header("Location", "/")
+                self.send_header("Location", "/?card=" + quote(card["id"]))
                 self.end_headers()
                 return
             self._json(200, card)
@@ -187,12 +200,17 @@ def make_server(path, host="127.0.0.1", port=0):
             length = int(self.headers.get("Content-Length", "0") or 0)
             raw = self.rfile.read(length).decode() if length else ""
             kind = self.headers.get("Content-Type", "")
-            if "application/json" in kind:
-                return json.loads(raw or "{}")
-            parsed = {key: values[-1] for key, values in parse_qs(raw).items()}
-            parsed["_form"] = True
-            if "attachments" in parsed:
-                parsed["attachments"] = json.loads(parsed["attachments"])
+            if "application/x-www-form-urlencoded" in kind:
+                parsed = {key: values[-1] for key, values in parse_qs(raw).items()}
+                parsed["_form"] = True
+                if "attachments" in parsed:
+                    parsed["attachments"] = json.loads(parsed["attachments"])
+                return parsed
+            if not raw:
+                return {}
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise CardError("invalid")
             return parsed
 
         def _json(self, code, obj):
@@ -330,9 +348,9 @@ def _row(view, item, full, selected):
     state = "unread" if item["unread"] else "read"
     current = ' aria-current="true"' if full["id"] == selected else ""
     pip = '<i class="pip"></i><span class="clip">未读</span>' if item["unread"] else ""
-    held = "".join('<p class="clip">%s</p>' % _esc(attachment["content"]) for attachment in full["attachments"])
     request = " ".join(full["request"].split())
-    extra = request[len(full["title"]):].strip()
+    title = " ".join(full["title"].split())
+    extra = request[len(title):].strip() if request.startswith(title) else ""
     preview = '<span class="preview">%s</span>' % _esc(extra) if extra else ""
     return (
         "<li><article>"
@@ -340,7 +358,7 @@ def _row(view, item, full, selected):
         '<span class="avatar %s">%s</span>'
         '<span class="copy"><span class="who">%s%s</span><span class="subject">%s</span>%s</span>'
         '<span class="when">%s</span>'
-        "</a>%s</article></li>"
+        "</a></article></li>"
         % (
             state,
             quote(view),
@@ -353,7 +371,6 @@ def _row(view, item, full, selected):
             _esc(full["title"]),
             preview,
             _esc(_when(latest)),
-            held,
         )
     )
 
@@ -397,13 +414,16 @@ def _reader(opened, name, path, token):
                 _esc(entry["body"]),
             )
         )
-    parts.append("</ol></section></div></div>")
+    parts.append("</ol></section>")
+    if opened["conclusion"]:
+        parts.append('<p class="conclusion">结论 %s</p>' % _esc(opened["conclusion"]))
+    parts.append("</div></div>")
     parts.append('<div class="composer">')
     if role == "接收人":
         parts.append(_form("/cards/%s/reply" % opened["id"], "回复", "写回这张卡"))
         if not closed:
             endpoint = _endpoint(path, token)
-            client = endpoint["default_client"] or "claude"
+            client = (endpoint["default_client"] or "claude").strip().lower()
             link = build(client, opened["id"], opened["repo_name"], endpoint["code_root"])
             parts.append('<a class="ghost" href="%s">交给我的 Agent 处理<em>%s</em></a>' % (_esc(link), _esc(_client_name(client))))
     if role == "发起人":

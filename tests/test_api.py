@@ -1,8 +1,6 @@
 import json
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -62,26 +60,47 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(shown["status"], "待处理")
 
     def test_open_stream_receives_the_new_card(self):
-        box = {}
+        import http.client
+        from urllib.parse import urlparse
 
-        def listen():
-            status, body, _headers = call(self.url, "GET", "/events", token=self.b)
-            box["status"] = status
-            box["body"] = body
+        parsed = urlparse(self.url)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=3)
+        conn.request("GET", "/events", headers={"Authorization": "Bearer " + self.b})
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        call(self.url, "POST", "/cards", token=self.a, payload={"recipient": "B", "type": "问题", "request": "新问题"})
+        data = b""
+        while b"\n\n" not in data:
+            chunk = response.read(1)
+            if not chunk:
+                break
+            data += chunk
+        conn.close()
+        self.assertIn("新问题", data.decode())
 
-        thread = threading.Thread(target=listen)
-        thread.start()
-        time.sleep(0.2)
-        call(
-            self.url,
-            "POST",
-            "/cards",
-            token=self.a,
-            payload={"recipient": "B", "type": "问题", "request": "新问题"},
+    def test_bad_json_and_a_bodyless_close_stay_on_the_json_path(self):
+        import urllib.request
+
+        request = urllib.request.Request(
+            self.url + "/cards",
+            data=b"not-json",
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.a},
+            method="POST",
         )
-        thread.join(timeout=3)
-        self.assertEqual(box["status"], 200)
-        self.assertIn("新问题", box["body"].decode())
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(caught.exception.code, 400)
+
+        card = json.loads(call(self.url, "POST", "/cards", token=self.a, payload={"recipient": "B", "type": "问题", "request": "能关吗"})[1])
+        request = urllib.request.Request(
+            self.url + "/cards/" + card["id"] + "/close",
+            data=b"",
+            headers={"Authorization": "Bearer " + self.a, "Content-Length": "0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("已关闭", response.read().decode())
 
 
 if __name__ == "__main__":

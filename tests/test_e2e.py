@@ -44,7 +44,7 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(listed[0]["id"], card_id)
         self.assertEqual(listed[0]["status"], "待处理")
         self.assertIn("补退款状态接口", listed[0]["request"])
-        self.assertIn("VISIBLE_FIELD", self.inbox_page())
+        self.assertIn("补退款状态接口", self.inbox_page())
         self.assertEqual(stored["status"], "待处理")
 
         reminded = self.cli(["inbox", "--hook"], self.b)

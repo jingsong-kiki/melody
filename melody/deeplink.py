@@ -1,5 +1,6 @@
-import os
 from urllib.parse import quote
+
+from melody.card import safe_repo
 
 
 def build(client, public_id, repo_name, code_root):
@@ -22,9 +23,6 @@ def build(client, public_id, repo_name, code_root):
 
 
 def _directory(repo_name, code_root):
-    if not repo_name or not code_root:
+    if not repo_name or not code_root or not safe_repo(repo_name):
         return ""
-    candidate = os.path.join(code_root, repo_name)
-    if os.path.isdir(candidate):
-        return candidate
-    return ""
+    return code_root.rstrip("/") + "/" + repo_name

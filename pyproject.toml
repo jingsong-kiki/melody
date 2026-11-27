@@ -1,0 +1,18 @@
+[project]
+name = "melody"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "事项卡收件箱"
+
+[project.scripts]
+melody = "melody.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["melody*"]
+
+[tool.setuptools.package-data]
+melody = ["inbox.html"]
