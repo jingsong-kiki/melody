@@ -178,6 +178,7 @@
       vertical-align: middle;
     }
     .empty { padding: 28px 16px; color: var(--faint); }
+    .conclusion { margin: 8px 0 20px; color: var(--body); }
     .clip {
       position: absolute;
       width: 1px;
@@ -345,7 +346,10 @@
         if (window.Notification && Notification.permission === "granted") {
           new Notification("melody " + item.id, {body: item.title + "，来自 " + item.sender});
         }
-        location.reload();
+        var busy = Array.prototype.some.call(document.querySelectorAll("textarea"), function (field) {
+          return field.value.trim() !== "";
+        });
+        if (!busy) location.reload();
       };
     }
   </script>

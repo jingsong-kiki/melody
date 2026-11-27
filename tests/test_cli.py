@@ -50,11 +50,60 @@ class CliTest(unittest.TestCase):
         self.assertEqual(down.stdout, "")
         self.assertLess(elapsed, 1)
 
-    def run_cli(self, args, token, url=None):
+    def test_show_prints_a_follow_up_and_a_conclusion(self):
+        card = json.loads(
+            call(self.url, "POST", "/cards", token=self.a, payload={"recipient": "B", "type": "问题", "request": "这个字段谁写"})[1]
+        )
+        call(self.url, "POST", "/cards/" + card["id"] + "/reply", token=self.b, payload={"body": "服务端写"})
+        call(self.url, "POST", "/cards/" + card["id"] + "/follow-up", token=self.a, payload={"body": "空值呢"})
+        shown = self.run_cli(["show", card["id"]], self.b)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertIn("追问", shown.stdout)
+        self.assertIn("空值呢", shown.stdout)
+        self.assertIn("服务端写", shown.stdout)
+        call(self.url, "POST", "/cards/" + card["id"] + "/close", token=self.a, payload={"conclusion": "单独的结论"})
+        closed = self.run_cli(["show", card["id"]], self.a)
+        self.assertIn("单独的结论", closed.stdout)
+
+    def test_hook_stays_quiet_when_the_local_config_cannot_be_read(self):
+        config = Path(self.dir.name) / "broken.json"
+        config.write_text("{", encoding="utf-8")
+        result = self.run_cli(["inbox", "--hook"], token=None, url=None, config=config)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_config_can_be_saved_when_the_path_has_no_directory(self):
+        from melody.cli import save_config
+
+        path = Path(self.dir.name) / "bare.json"
+        previous = os.getcwd()
+        saved = os.environ.get("MELODY_CONFIG")
+        os.chdir(self.dir.name)
+        try:
+            os.environ["MELODY_CONFIG"] = path.name
+            save_config({"url": self.url, "token": "t", "name": "A"})
+        finally:
+            if saved is None:
+                os.environ.pop("MELODY_CONFIG", None)
+            else:
+                os.environ["MELODY_CONFIG"] = saved
+            os.chdir(previous)
+        self.assertEqual(json.loads(path.read_text())["name"], "A")
+
+    def run_cli(self, args, token, url=None, config=None):
         env = os.environ.copy()
-        env["MELODY_URL"] = url or self.url
-        env["MELODY_TOKEN"] = token
-        env["MELODY_CONFIG"] = str(Path(self.dir.name) / "config.json")
+        if url is not None:
+            env["MELODY_URL"] = url
+        elif url is None and token is not None:
+            env["MELODY_URL"] = self.url
+        else:
+            env.pop("MELODY_URL", None)
+        if token:
+            env["MELODY_TOKEN"] = token
+        else:
+            env.pop("MELODY_TOKEN", None)
+        env["MELODY_CONFIG"] = str(config or Path(self.dir.name) / "config.json")
         return subprocess.run([sys.executable, "-m", "melody", *args], cwd=ROOT, env=env, text=True, capture_output=True)
 
 

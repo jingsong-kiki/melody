@@ -16,6 +16,12 @@ class PluginTest(unittest.TestCase):
                         commands.append(hook["command"])
             self.assertEqual(commands, ["melody inbox --hook", "melody inbox --hook"])
 
+    def test_the_melody_command_is_declared(self):
+        import tomllib
+
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        self.assertEqual(project["project"]["scripts"]["melody"], "melody.cli:main")
+
 
 if __name__ == "__main__":
     unittest.main()

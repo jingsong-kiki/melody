@@ -81,9 +81,13 @@ def show_cmd(argv):
     print(card["request"])
     for item in card["attachments"]:
         print(item["content"])
+    if card.get("conclusion"):
+        print(card["conclusion"])
     for item in card["entries"]:
-        if item["entry_type"] == "回复":
-            print(item["body"])
+        if item["entry_type"] == "补充":
+            continue
+        print(f"{item['author']} {item['entry_type']}")
+        print(item["body"])
     return 0
 
 
@@ -101,17 +105,23 @@ def reply_cmd(argv):
 
 def endpoint(argv):
     parser = argparse.ArgumentParser(prog="melody endpoint")
-    parser.add_argument("--client", default="claude")
-    parser.add_argument("--root", default="")
+    parser.add_argument("--client", default=None)
+    parser.add_argument("--root", default=None)
     args = parser.parse_args(argv)
-    request("POST", "/endpoint", {"default_client": args.client, "code_root": args.root})
+    payload = {}
+    if args.client is not None:
+        payload["default_client"] = args.client
+    if args.root is not None:
+        payload["code_root"] = args.root
+    if payload:
+        request("POST", "/endpoint", payload)
     return 0
 
 
 def hook():
     try:
-        payload = request("GET", "/hook", timeout=0.8)
-    except (urllib.error.URLError, TimeoutError, OSError, SystemExit):
+        payload = request("GET", "/hook", timeout=0.8, quiet=True)
+    except (Exception, SystemExit):
         return 0
     items = payload.get("items") or []
     if not items:
@@ -122,7 +132,7 @@ def hook():
     return 0
 
 
-def request(method, path, payload=None, token=True, timeout=5):
+def request(method, path, payload=None, token=True, timeout=5, quiet=False):
     url = base_url() + path
     data = None if payload is None else json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
@@ -137,7 +147,8 @@ def request(method, path, payload=None, token=True, timeout=5):
             return json.loads(raw.decode())
     except urllib.error.HTTPError as error:
         body = error.read().decode()
-        print(body, file=sys.stderr)
+        if not quiet:
+            print(body, file=sys.stderr)
         raise SystemExit(1) from error
 
 
@@ -163,7 +174,9 @@ def load_config():
 
 def save_config(config):
     path = config_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(config, handle)
 
